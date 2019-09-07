@@ -1,0 +1,83 @@
+@InProceedings{Dtree,
+doi={10.1007/978-3-319-20119-1_10},
+author="Pamnany, Kiran
+and Misra, Sanchit
+and Md., Vasimuddin
+and Liu, Xing
+and Chow, Edmond
+and Aluru, Srinivas",
+editor="Kunkel, Julian M.
+and Ludwig, Thomas",
+title="Dtree: Dynamic Task Scheduling at Petascale",
+booktitle="High Performance Computing",
+year="2015",
+publisher="Springer International Publishing",
+address="Cham",
+pages="122--138",
+abstract="Irregular applications are challenging to scale on supercomputers due to the difficulty of balancing load across large numbers of nodes. This challenge is exacerbated by the increasing heterogeneity of modern supercomputers in which nodes often contain multiple processors and coprocessors operating at different speeds, and with differing core and thread counts. We present Dtree, a dynamic task scheduler designed to address this challenge. Dtree shows close to optimal results for a class of HPC applications, improving time-to-solution by achieving near-perfect load balance while consuming negligible resources. We demonstrate Dtree's effectiveness on up to 77,824 heterogeneous cores of the TACC Stampede supercomputer with two different petascale HPC applications: ParaBLe, which performs large-scale Bayesian network structure learning, and GTFock, which implements Fock matrix construction, an essential and expensive step in quantum chemistry codes. For ParaBLe, we show improved performance while eliminating the complexity of managing heterogeneity. For GTFock, we match the most recently published performance without using any application-specific optimizations for data access patterns (such as the task distribution design for communication reduction) that enabled that performance. We also show that Dtree can distribute from tens of thousands to hundreds of millions of irregular tasks across up to 1024 nodes with minimal overhead, while balancing load to within 2 {\%} of optimal.",
+isbn="978-3-319-20119-1"
+}
+
+@inproceedings{Vaidyanathan:2015:ICA:2807591.2807602,
+ author = {Vaidyanathan, Karthikeyan and Kalamkar, Dhiraj D. and Pamnany, Kiran and Hammond, Jeff R. and Balaji, Pavan and Das, Dipankar and Park, Jongsoo and Jo\'{o}, B\'{a}lint},
+ title = {Improving Concurrency and Asynchrony in Multithreaded MPI Applications Using Software Offloading},
+ booktitle = {Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis},
+ series = {SC '15},
+ year = {2015},
+ isbn = {978-1-4503-3723-6},
+ location = {Austin, Texas},
+ pages = {30:1--30:12},
+ articleno = {30},
+ numpages = {12},
+ url = {http://doi.acm.org/10.1145/2807591.2807602},
+ doi = {10.1145/2807591.2807602},
+ acmid = {2807602},
+ publisher = {ACM},
+ address = {New York, NY, USA},
+}
+
+
+@inproceedings{Chen:2007:STC:1248377.1248396,
+ author = {Chen, Shimin and Gibbons, Phillip B. and Kozuch, Michael and Liaskovitis, Vasileios and Ailamaki, Anastassia and Blelloch, Guy E. and Falsafi, Babak and Fix, Limor and Hardavellas, Nikos and Mowry, Todd C. and Wilkerson, Chris},
+ title = {Scheduling Threads for Constructive Cache Sharing on CMPs},
+ booktitle = {Proceedings of the Nineteenth Annual ACM Symposium on Parallel Algorithms and Architectures},
+ series = {SPAA '07},
+ year = {2007},
+ isbn = {978-1-59593-667-7},
+ location = {San Diego, California, USA},
+ pages = {105--115},
+ numpages = {11},
+ url = {http://doi.acm.org/10.1145/1248377.1248396},
+ doi = {10.1145/1248377.1248396},
+ acmid = {1248396},
+ publisher = {ACM},
+ address = {New York, NY, USA},
+ keywords = {chip multiprocessors, constructive cache sharing, parallel depth first, scheduling algorithms, thread granularity, work stealing, working set profiling},
+}
+
+@article{Hoare:1978:CSP:359576.359585,
+ author = {Hoare, C. A. R.},
+ title = {Communicating Sequential Processes},
+ journal = {Commun. ACM},
+ issue_date = {Aug. 1978},
+ volume = {21},
+ number = {8},
+ month = aug,
+ year = {1978},
+ issn = {0001-0782},
+ pages = {666--677},
+ numpages = {12},
+ url = {http://doi.acm.org/10.1145/359576.359585},
+ doi = {10.1145/359576.359585},
+ acmid = {359585},
+ publisher = {ACM},
+ address = {New York, NY, USA},
+ keywords = {classes, concurrency, conditional critical regions, coroutines, data representations, guarded commands, input, iterative arrays, monitors, multiple entries, multiple exits, nondeterminacy, output, parallel programming, procedures, program structures, programming, programming languages, programming primitives, recursion},
+}
+
+@manual{mono-coop-suspend,
+ title  = "Cooperative Suspend",
+ author = "The Mono Project",
+ url    = "https://www.mono-project.com/docs/advanced/runtime/docs/coop-suspend/",
+ year   = "Apr 16, 2018"
+}

@@ -1,0 +1,28 @@
+title: "Basic Threading Examples in JuliaLang v1.3"
+keywords:
+  - Julia
+  - JuliaLang
+  - Multithreading
+  - Parallelism
+  - Concurrency
+  - Optimization
+  - Compiler
+  - Runtime VM
+authors:
+  - name: Jameson Nash
+    orcid: 0000-0002-8991-0523
+    affiliation: 1
+authors:
+  - name: Jeff Bezanson
+    affiliation: 1
+authors:
+  - name: Kiran Pamnany
+    affiliation: 2
+affiliations:
+  - name: Julia Computing, Inc.
+    index: 1
+affiliations:
+  - name: Intel Corporation
+    index: 2
+date: 31 August 2019
+bibliography: ref.bib
