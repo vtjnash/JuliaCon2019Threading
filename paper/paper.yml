@@ -12,10 +12,9 @@ authors:
   - name: Jameson Nash
     orcid: 0000-0002-8991-0523
     affiliation: 1
-authors:
   - name: Jeff Bezanson
+    orcid: 0000-0002-0086-2255
     affiliation: 1
-authors:
   - name: Kiran Pamnany
     affiliation: 2
 affiliations:
