@@ -1,4 +1,3 @@
-
 % Based on the JuliaCon proceedings template
 % Layout inspired by the International Journal of Computer Applications template
 \documentclass{juliacon}
@@ -63,9 +62,9 @@
 
 \begin{abstract}
 
-A major distinguishing point of any programming language is how it deals with concurrency. Of course, I'm really interested here in parallelism, and specifically how to get the best throughput out of my application. But we know that actually taking advantage of all cores correctly and efficiently is really hard as a programmer. Here we take a look at how JuliaLang prepares to unleash the full power of your modern CPU's many cores.
+A major distinguishing point of any programming language is how it deals with concurrency. Programmers want to extract the best throughput possible for their applications, but it is well known that taking advantage of all available CPU cores correctly and efficiently is hard. Here, we look at how JuliaLang unleashes the full power of a modern CPU's multiple cores.
 
-Hopefully we won't drive any users mad with frustration as they try to write code to utilize threads. Towards that end, we'll look at how JuliaLang looks to provide a range of modern primitives that are designed to automatically compose effectively, and some of the trade-offs we make to try to simplify the mental model for the user. We'll also take a look at where we think that this development should go towards next.
+One of our key considerations is to reduce the programmer's burden. We will discuss how JuliaLang aims to provide a range of modern primitives that are designed to automatically compose effectively, and some of the trade-offs we make to try to simplify the mental model for the programmer. We'll also briefly discuss our thoughts on future development.
 
 
 \end{abstract}
@@ -73,21 +72,23 @@ Hopefully we won't drive any users mad with frustration as they try to write cod
 \section{Introduction}
 \label{subsub:intro}
 
-A design principle for JuliaLang is to make common tasks easy and difficult tasks possible. This has extended from automatic memory management vs manual memory reuse, to having one type of method with dispatch, to optional type-inference for performance. And now, this includes concurrency. By extending design work that has been present in the language for many years to provide parallelism, we developed a means to add parallelism that preserved the (relative) simplicity of single-threaded for existing code, while allowing new code to benefit from the possibility of threading. This work has been inspired by parallel programming systems like Cilk, Intel Threading Building Blocks (TBB) and Go.
+A design principle for JuliaLang is to make common tasks easy and difficult tasks possible. This is demonstrated in multiple aspects of the language, from automatic memory management vs.\ manual memory reuse, to having one type of method with dispatch, to optional type-inference for performance. We now extend this to concurrency. By extending design work that has been present in the language for many years to provide concurrency, we have developed a means to add parallelism that preserves the (relative) simplicity of single-threaded execution for existing code, while allowing new code to benefit from multi-threaded execution. This work has been inspired by parallel programming systems such as Cilk, Intel Threading Building Blocks (TBB) and Go.
 
-In this paradigm, any piece of a program can be marked for execution in parallel, and a “task” will be started to run that code automatically on an available thread. A dynamic scheduler handles making cache-aware decisions for when to launch the work items. This model of parallelism has many wonderful properties. We see it as somewhat analogous to garbage collection: with GC, you freely allocate objects without worrying about when and how they are freed. With task parallelism, you freely spawn tasks—potentially millions of them—without worrying about where they may eventually run.
+In this paradigm, any piece of a program can be marked for execution in parallel, and a \emph{task} will be started to run that piece of code automatically on an available thread. A dynamic scheduler handles making cache-aware decisions on when and where to launch tasks. This model of parallelism has many helpful properties. We see it as somewhat analogous to garbage collection: with GC, you freely allocate objects without worrying about when and how they are freed. With task parallelism, you freely spawn tasks--potentially millions of them--without worrying about where they may eventually run.
 
-The model is portable and free from low-level details. You don’t need to explicitly start and stop threads, and you don’t even need to know how many processors or threads there are (though you can find out if you want).
+The model is portable and free from low-level details. The programmer does not need to manage threads, nor even know how many processors or threads are available.
 
-The model is nestable and compose-able: you can start parallel tasks that call library functions that themselves start parallel tasks, and everything works. This property is crucial for a high-level language where a lot of work is done by library functions. You need to be free to write whatever code you need—including parallel code—without worrying about how the libraries it calls are implemented. This model isn't limited just to JuliaLang code either: we've shown it can be extended to native libraries such as FFTW and are working on extending it to OpenBLAS.
+The model is nestable and composable: parallel tasks can be started that call library functions that themselves start parallel tasks, and everything works correctly. This property is crucial for a high-level language where a lot of work is done by library functions. The programmer can write serial or parallel code without worrying about how the libraries used are implemented. This model isn't limited to JuliaLang libraries alone: we've shown that it can be extended to native libraries such as FFTW and are working on extending it to OpenBLAS.
 
 
 \subsection{Background History}
 \label{subsub:background}
 
-Initially, JuliaLang exclusively provided users the ability to use cooperatively scheduled workers. In other contexts, these may be known as ``green threads'', ``threadlets'', or ``coroutines''. In Julia, we've called these tasks. A task is a unit of work with it's own context (stack) whose execution can be interleaved with that of any other task. Additionally, these have the ability to produce a value or an exception, making them useful for structured concurrency, without requiring an extra channel to manage. But they haven't had the ability to work in parallel (simultaneously).
+Initially, JuliaLang exclusively provided users the ability to use cooperatively scheduled workers. In other contexts, these may be known as ``green threads'', ``threadlets'', or ``coroutines''. In Julia, we've called these tasks. A task is a unit of work with its own context (stack) whose execution can be interleaved with that of any other task. Additionally, these have the ability to produce a value or an exception, making them useful for structured concurrency, without requiring an extra channel to manage. But they haven't had the ability to work in parallel (simultaneously).
 
-These have been good for writing generators and outstanding for dealing with I/O workloads. In these cases, we know we might have a lot of unpredictable latency, so we need to be able to quickly jump between various threads of operation. When an event comes in, we need to resume our context quickly to react to the event before going off to handle something else. For example, a common pattern for a server is to provide a separate context for each child. Let's look at some code snippets for a toy socket echo server in a few other languages. With JavaScript promises, we could make something like the following work:
+Tasks have been useful for writing generators and outstanding for dealing with I/O workloads. Such cases present unpredictable latency and therefore the ability to quickly switch between different control flows is essential. The arrival of an event requires a quick context switch to react to the event, and quickly switching back to resume the original work.
+
+A common pattern for a server is to provide a context for each child. Consider the following code snippet for a toy socket echo server. With JavaScript promises:
 
 \begin{lstlisting}[language = JavaScript]
 while (true) {
@@ -106,7 +107,7 @@ while (true) {
 };
 \end{lstlisting}
 
-With async/await we can make that a bit clearer with better structure and cut that down:
+This can be made clearer and the structure improved with async/await:
 \begin{lstlisting}[language = JavaScript]
 (async () => {
     while (true) {
@@ -120,7 +121,9 @@ With async/await we can make that a bit clearer with better structure and cut th
 })();
 \end{lstlisting}
 
-But we still have some slightly obnoxious syntax there creating some distracting line noise. While most parts of the language are loosely typed and inferred by the runtime, this distinction is forced upon the user. So then, let's see how we would write that in Julia:
+This leaves some slightly obnoxious syntax, creating distracting line noise. When most parts of the language are loosely typed and inferred by the runtime, this distinction is forced upon the programmer.
+
+Consider the Julia version:
 
 \begin{lstlisting}[language = Julia]
 # function accept(cb, server)
@@ -137,13 +140,15 @@ accept(listen(port)) do client
 end
 \end{lstlisting}
 
-Notice here how we would typically leverage the do-block syntax to additionally re-use the loop logic, Task allocation, and error handling from a central place.
+Notice here how we leverage the do-block syntax to additionally re-use the loop logic, task allocation, and error handling from a central place.
 
-This works well for latency-bound activities, such as a web-server. But these codes only used one core, even though they only need to do thread-local actions, and so running these simultaneously on multiple threads should not require major changes. But also a lot of code is not written with the expectation of concurrent access, so we wanted to continue providing both kinds of concurrency. If we define a thread as a unit of work managed by the runtime system, we can call this $N:1$ threading, where the runtime library lets you manage N independent operations and maps them onto one system thread (approximately representing a CPU core). In the new system, we'll let the user now additionally have M CPU cores. This goes beyond the classic $N:M$ threading model however, as you have cooperative affinities where certain tasks won't interrupt each other. I propose calling this $N(k:1):M$ scheduling since we're combining the advantages of single-threaded work queues with multiple cores.
+This works well for latency bound activities such as a web server. Note that this code only uses one core, although as it performs only thread-local actions, it \emph{could} be run simultaneously on multiple cores without significant change. However, there is also a lot of code that is not written with the expectation of simultaneous access. As such, we want to continue to provide concurrency\footnote{When at least two threads are making progress; a more general form of parallelism that can include time-slicing.} as well as parallelism\footnote{When at least two threads are executing simultaneously}. If we define a thread as a unit of work managed by the runtime system, we can call this $N \mathbin{:} 1$ threading, where the runtime library manages $N$ independent operations and maps them onto one system thread (approximately representing a CPU core). In the new system, we'll let the user now additionally have $M$ CPU cores. This goes beyond the classic $N \mathbin{:} M$ threading model however, as the programmer can specify cooperative affinities where certain tasks won't interrupt each other. We'll call this $N (k \mathbin{:} 1) \mathbin{:} M$ scheduling since we're combining the advantages of single-threaded work queues with multiple cores.
 
-In $N(k:1):M$ scheduling, we have N units of work mapped onto M cpu threads. Additionally, each of those units of work may be composed of k cooperatively scheduled Tasks. This is achieved by pinning the tasks in the group to one CPU-thread, while load balancing those across the available cores using the novel partr scheduler algorithm. Finally, we can extend this model once more by factoring out a common factor of $P:P$ to write this as $N(k:1):M+P(k:1):P$ and derive one further useful use case: the ability to pin one thread to running one task (or task-group). These P tasks could be an over-subscription of the CPU cores, or take away from M, or both. Typical uses for this mode of operation would be high-availability tasks (with low latency requirements, but also minimal computation), such as background I/O processing, blocking work pools (foreign library integration), finalizers, or message server queues.
+In $N (k \mathbin{:} 1) \mathbin{:} M$ scheduling, we have $N$ units of work mapped onto $M$ CPU threads. Additionally, each of those units of work may be composed of $k$ cooperatively scheduled tasks. This is achieved by pinning the $k$ tasks in a group to one CPU thread, while load balancing units of work across the available cores using the \verb|partr| scheduler, a novel implementation of a parallel depth-first scheduling algorithm.
 
-The newest work here is to implement a thread-aware scheduler. For a couple years, JuliaLang has been able to perform simple tasks with some caveats with a static work schedule and minimal-to-none inter-thread communication. This had been given the status of ``experimental,'' while we worked out the details and shook out the bugs. The recent work to generalize that functionality has allowed us to rewrite that older static capability on top of our new runtime, demonstrating the power and flexibility of the new system. While the old system let us test out the thread-related bugs in the runtime, it had some significant shortcomings. We knew those would need to be addressed before we could move beyond the ``experimental'' label.
+We can extend this model further by factoring out a common factor of $P \mathbin{:} P$ to write this as $N (k \mathbin{:} 1) \mathbin{:} M\ +\ P(k \mathbin{:} 1) \mathbin{:} P$ and derive one further useful use case: the ability to pin one thread to running one task (or task-group). These $P$ tasks could be an over-subscription of the CPU cores, or take away from $M$, or both. Typical uses for this mode of operation would be high-availability tasks (with low latency requirements, but also minimal computation), such as background I/O processing, blocking work pools (foreign library integration), finalizers, or message server queues.
+
+The newest work here is the implementation of a thread-aware scheduler. For a couple years, JuliaLang has been able to perform simple loop parallelism with numerous caveats including a static work schedule and minimal to none inter-thread communication. This had been labelled ``experimental,'' while we worked out the details and shook out the bugs. The recent work to generalize that functionality has allowed us to rewrite that older static capability on top of our new runtime, demonstrating the power and flexibility of the new system. While the old system let us test out the thread-related bugs in the runtime, it had some significant shortcomings. We knew those would need to be addressed before we could move beyond the ``experimental'' label.
 
 Those limitations included:
 \begin{itemize}
@@ -155,8 +160,8 @@ Those limitations included:
 
 \begin{calloutbox}[Running Julia with Threads]
 In the examples below, we will be using JuliaLang v1.3 launched with multiple threads.
-To get follow along on your own machine, you will want to download the upcoming JuliaLang release (currently v1.3.0-rc1) from \url{https://julialang.org/downloads}.
-Run \verb|./julia| with the environment variable \verb|JULIA_NUM_THREADS=| set to the number of threads to use.
+To follow along on your own machine, you will need to download the upcoming JuliaLang release (currently v1.3.0-rc1) from \url{https://julialang.org/downloads}.
+Run \verb|./julia| with the environment variable \verb|JULIA_NUM_THREADS| set to the number of threads to use.
 
 Alternatively, after installing JuliaLang, follow the steps at \url{http://docs.junolab.org/latest/man/installation/} to install the \href{https://junolab.org}{Juno IDE}. It will automatically set the number of threads based on the number of available processor cores, and also provides a graphical interface for changing the number of threads.
 \end{calloutbox}
@@ -366,7 +371,7 @@ JuliaLang can express this operation so well because it defines an expressive fr
 
 Each of the examples above shows a performance benefit attained from adding threads!
 
-On my quad-core laptop (Intel(R) Core(TM) i7-8559U CPU @ 2.70GHz), I obtained the following scaling and timing numbers shown in table \ref{table:timings} and \ref{table:scalings}.
+On a quad-core laptop (Intel(R) Core(TM) i7-8559U CPU @ 2.70GHz), we observed the scaling and timing numbers shown in Tables \ref{table:timings} and \ref{table:scalings}.
 
 \lstDeleteShortInline|
 \begin{table}[ht]
@@ -521,12 +526,12 @@ When using locks, there is a hierarchy of access that must be respected to avoid
 
 The missing toplevel lock is interesting, since it is a lock against concurrent execution of \textit{any} other code. This will require halting all other threads in some way to inhibit accidental observation of the global state while it's in an intermediate inconsistent state. This should be possible in coordination with the GC-safepoint lock, which already has a very similar problem.
 
-Some aspects were still too performance critical however to be able to use a lock there, so we also make careful use of atomic pointer-publishing updates in a few specific places. As special-cases of that, we use RCU-type (read-copy-update) updates in some places and write-once in other places). This is known to work on most computer architectures. Others, such as the notorious A, we are content to exclude. In a code-base that already supports garbage-collection, the RCU algorithm is greatly simplified (and writers pay no additional cost), so this is typically preferred, if mutation is absolutely required and reads must be fast. Otherwise, a simple lock is used.
+Some aspects were still too performance critical however to be able to use a lock there, so we also make careful use of atomic pointer-publishing updates in a few specific places. As special-cases of that, we use RCU-type (read-copy-update) updates in some places and write-once in other places). This is known to work on most computer architectures. Others, such as the notorious DEC Alpha, we are content to exclude. In a code-base that already supports garbage-collection, the RCU algorithm is greatly simplified (and writers pay no additional cost), so this is typically preferred, if mutation is absolutely required and reads must be fast. Otherwise, a simple lock is used.
 
 \section{Implementation}
 \label{subsub:implementation}
 
-A prototype implementation of the \verb|partr| scheduler was first written for us in C by Kiran Pamnany of Intel back in late 2016, following research done on scheduling threads for beneficial cache sharing for best throughput\cite{Chen:2007:STC:1248377.1248396}. The goal of this work was effortless composition of threading-capable libraries with a globally depth-first work ordering (as opposed to $1:1$/preemptive scheduling, which would try to make progress on all work, or work-stealing scheduling, which is only depth-first local to a thread and is globally breadth-first).
+A prototype implementation of the \verb|partr| scheduler was first written for us in C by Kiran Pamnany of Intel back in late 2016, following research done on scheduling threads for beneficial cache sharing for best throughput\cite{Chen:2007:STC:1248377.1248396}. The goal of this work was effortless composition of threading-capable libraries with a globally depth-first work ordering (as opposed to $1 \mathbin{:} 1$/preemptive scheduling, which would try to make progress on all work, or work-stealing scheduling, which is only depth-first local to a thread and is globally breadth-first).
 
 The next stage of this work was then to integrate it with the existing JuliaLang runtime system and hoist as much of the implementation as possible into native Julian code. (Aside: one outcome of this work has been to allow us to delete much of the special support code from the C runtime for our prior experimental `\verb|@threads|' fork/join-style API!)
 
@@ -535,25 +540,25 @@ A big challenge of this work has been implementing a sound algorithm for determi
 \section{Foreign Libraries}
 \label{subsub:ffi}
 
-An important motivation for this work was our desire to better support multi-threaded-capable libraries, without considerable CPU over-subscription killing performance due to cache-thrashing and frequent preemptive CPU context switches. Previously, the only options were often for the user to decide up-front to limit JuliaLang to N threads, and tell the threaded library (such as libfftw or libblas) use $\lfloor M \div N \rfloor$ (floordiv) cores. The most common choices probably being 1 and M, so only part of the application and running time is able to benefit from the presence of multiple cores in the system. However, given our ability to quickly create and run work items in our thread pool, we are looking at how to work with external libraries also and let them also integrate with our existing thread-pool.
+An important motivation for this work was our desire to better support multi-threaded capable libraries, without considerable CPU over-subscription killing performance due to cache-thrashing and frequent preemptive CPU context switches. Previously, the only options were often for the user to decide up-front to limit JuliaLang to N threads, and tell the threaded library (such as libfftw or libblas) use $\lfloor M \div N \rfloor$ (floordiv) cores. The most common choices probably being 1 and M, so only part of the application and running time is able to benefit from the presence of multiple cores in the system. However, given our ability to quickly create and run work items in our thread pool, we are looking at how to work with external libraries also and let them also integrate with our existing thread-pool.
 
 This is an on-going area of exploration as we get feedback on the performance and API needs of various libraries.
 
-We've successfully adapted FFTW to run on top of our threading runtime instead of its own (a pthreads-based workpool). This took us only a few hours! (We were fortunate to be able to enlist the assistance of that library's author). Without any performance tweaking (yet), it got competitive performance results! We learned important lessons in needing to tightly optimize our scheduler latency, which is now ongoing work to achieve exact performance parity. Even with some overhead imposed by generality, however, we expect that the ability to compose thread-aware users and enable the better resource sharing created by the partr scheduler will make this an overall improvement in program operation.
+We've successfully adapted FFTW to run on top of our threading runtime instead of its own (a pthreads-based workpool). This took us only a few hours! (We were fortunate to be able to enlist the assistance of that library's author). Without any performance tweaking (yet), it got competitive performance results! We learned important lessons in needing to tightly optimize our scheduler latency, which is now ongoing work to achieve exact performance parity. Even with some overhead imposed by generality however, we expect that the ability to compose thread-aware users and enable the better resource sharing created by the \verb|partr| scheduler will make this an overall improvement in program operation.
 
 \section{Future work}
 \label{subsub:future}
 
-While this work has been ongoing for several years already, there's still much interesting or important improvements to consider. We'd like to investigate ways to further expand the thread-safe API surface and integrate powerful thread-sanitizer tooling to help users write better code. There's also substantial room for the standard library to start using this threading runtime whenever possible. But we need to yet experiment with ways to safely and conveniently expose this option to users (which often seem contradictory).
+While this work has been ongoing for several years already, there are still many interesting and important improvements to consider. We'd like to investigate ways to further expand the thread-safe API surface and integrate powerful thread-sanitizer tooling to help users write better code. There's also substantial room for the standard library to start using this threading runtime whenever possible. However, we need to explore ways to safely and conveniently expose this option to users (which often seem contradictory).
 
-There also should be more performance testing to fine-tune the heuristic numbers. For example, when adding work items to the dynamic scheduler to run on $P$ cores, what is a good ratio factor $k$ to use when creating chunks of work? Should we make $1P$ items (assume a static schedule)? or $105P$ (assume a static schedule on either of $P$ or $P-1$ processors for $P=4,6,8,16$)? Or perhaps simply $3P$ is sufficient to balance out much variation? And yet other workloads, however, may want one work item for every input value (like \verb|Distributed.pmap| does)!
+Additional performance testing is necessary to fine-tune the heuristic numbers. For example, when adding work items to the dynamic scheduler to run on $P$ cores, what is a good ratio factor $k$ to use when creating chunks of work? Should we make $1P$ items (assume a static schedule)? or $105P$ (assume a static schedule on either of $P$ or $P-1$ processors for $P=4,6,8,16$)? Or perhaps simply $3P$ is sufficient to balance out much variation? And yet other workloads, however, may want one work item for every input value (like \verb|Distributed.pmap| does)!
 
-While I could mention many more items that remain to be explored, there's just one more I want to highlight: concurrent garbage collection. Currently, JuliaLang's runtime library needs to wait for all threads to arrive at a safe-point or be in a safe-region (such as foreign code) before GC can start. This can introduce long pauses if one or more threads are far away from hitting such a region. Presently, those only exist where manually inserted into the code, such as while waiting for a lock or doing allocation. In the future, it is proposed we investigate options for automatic placement of these by the system to minimize gc-start latency without unduly impacting allocation-free code. There are certainly more approaches to handle releasing memory then there are language implementations in existence, possibly multiple times over. So suffice to say this is an area with many possible trade-offs! For an example of where we might also go with this, please take a look at the \href{https://www.mono-project.com/docs/advanced/runtime/docs/coop-suspend/}{Mono project's documentation on cooperative thread suspension}\cite{mono-coop-suspend} for how a different language, which shares a common code-generation strategy, handles this.
+We specifically highlight one additional item: concurrent garbage collection. Currently, JuliaLang's runtime library needs to wait for all threads to arrive at a safe-point or be in a safe-region (such as foreign code) before GC can start. This can introduce long pauses if one or more threads are far away from hitting such a region. Presently, those only exist where manually inserted into the code, such as while waiting for a lock or doing allocation. In the future, we intend to investigate options for automatic placement of safe-points by the system to minimize GC start latency without unduly impacting allocation-free code. There are certainly more approaches to handle releasing memory then there are language implementations in existence, possibly multiple times over. So suffice to say this is an area with many possible trade-offs! For an example of where we might also go with this, please take a look at the \href{https://www.mono-project.com/docs/advanced/runtime/docs/coop-suspend/}{Mono project's documentation on cooperative thread suspension}\cite{mono-coop-suspend} for how a different language, which shares a common code-generation strategy, handles this.
 
 \section{Conclusions and summary}
 \label{subsub:conclusion}
 
-JuliaLang's approach to multi-threading combines many previously known ideas in a novel framework. While we believe that each in isolation is useful, that—as is so often the case—the sum is more than the parts.
+JuliaLang's approach to multi-threading combines many previously known ideas in a novel framework. While each in isolation is useful, we believe that--as is so often the case--the sum is greater than the parts.
 
 \section{Acknowledgements}
 \label{subsub:acknowledgements}
