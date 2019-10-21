@@ -254,12 +254,12 @@ function psort(v::AbstractVector)
     i, il, ir = 1, 1, 1
     @inbounds while il <= mid && ir <= (hi - mid)
         l, r = left[il], right[ir]
-        if l < r
-            out[i] = l
-            il += 1
-        else
+        if r < l
             out[i] = r
             ir += 1
+        else
+            out[i] = l
+            il += 1
         end
         i += 1
     end
