@@ -144,7 +144,7 @@ Notice here how we leverage the do-block syntax to additionally re-use the loop 
 
 This works well for latency bound activities such as a web server. Note that this code only uses one core, although as it performs only thread-local actions, it \emph{could} be run simultaneously on multiple cores without significant change. However, there is also a lot of code that is not written with the expectation of simultaneous access. As such, we want to continue to provide concurrency\footnote{When at least two threads are making progress; a more general form of parallelism that can include time-slicing.} as well as parallelism\footnote{When at least two threads are executing simultaneously}. If we define a thread as a unit of work managed by the runtime system, we can call this $N \mathbin{:} 1$ threading, where the runtime library manages $N$ independent operations and maps them onto one system thread (approximately representing a CPU core). In the new system, we'll let the user now additionally have $M$ CPU cores. This goes beyond the classic $N \mathbin{:} M$ threading model however, as the programmer can specify cooperative affinities where certain tasks won't interrupt each other. We'll call this $N (k \mathbin{:} 1) \mathbin{:} M$ scheduling since we're combining the advantages of single-threaded work queues with multiple cores.
 
-In $N (k \mathbin{:} 1) \mathbin{:} M$ scheduling, we have $N$ units of work mapped onto $M$ CPU threads. Additionally, each of those units of work may be composed of $k$ cooperatively scheduled tasks. This is achieved by pinning the $k$ tasks in a group to one CPU thread, while load balancing units of work across the available cores using the \verb|partr| scheduler, a novel implementation of a parallel depth-first scheduling algorithm.
+In $N (k \mathbin{:} 1) \mathbin{:} M$ scheduling, we have $N$ units of work mapped onto $M$ CPU threads. Additionally, each of those units of work may be composed of $k$ cooperatively scheduled tasks. This is achieved by pinning the $k$ tasks in a group to one CPU thread, while load balancing units of work across the available cores using the \verb|partr| scheduler, a novel implementation of a parallel depth-first scheduling algorithm. This will discussed future in section \ref{subsub:implementation}.
 
 We can extend this model further by factoring out a common factor of $P \mathbin{:} P$ to write this as $N (k \mathbin{:} 1) \mathbin{:} M\ +\ P(k \mathbin{:} 1) \mathbin{:} P$ and derive one further useful use case: the ability to pin one thread to running one task (or task-group). These $P$ tasks could be an over-subscription of the CPU cores, or take away from $M$, or both. Typical uses for this mode of operation would be high-availability tasks (with low latency requirements, but also minimal computation), such as background I/O processing, blocking work pools (foreign library integration), finalizers, or message server queues.
 
@@ -251,10 +251,17 @@ function psort(v::AbstractVector)
     left = fetch(half)::typeof(right)
 # perform the merge on the result
     out = similar(v)
+    merge!(left, right, out)
+    return out
+end
+
+function merge!(left, right, out)
+    ll, lr = length(left), length(right)
+    @assert ll + lr == length(out)
     i, il, ir = 1, 1, 1
-    @inbounds while il <= mid && ir <= (hi - mid)
+    @inbounds while il <= ll && ir <= lr
         l, r = left[il], right[ir]
-        if r < l
+        if isless(r, l)
             out[i] = r
             ir += 1
         else
@@ -263,12 +270,12 @@ function psort(v::AbstractVector)
         end
         i += 1
     end
-    @inbounds while il <= length(left)
+    @inbounds while il <= ll
         out[i] = left[il]
         il += 1
         i += 1
     end
-    @inbounds while ir <= length(right)
+    @inbounds while ir <= lr
         out[i] = right[ir]
         ir += 1
         i += 1
@@ -282,6 +289,8 @@ To see the timing results as we add threads, refer to figure \ref{fig:scalings} 
 While not demonstrated here, \verb|fetch| would also automatically propagate errors, with the result of it being an error thrown if the child task ended by throwing an exception.
 
 Since we are using in-process threads, we could further optimize this to instead mutate the input in-place and to reuse work buffers for additional performance. We have elsewhere tested that and shown the performance improvement is as expected. However, since the scaling improvement was similar between them, we've opted not to include it here.
+
+The algorithm given here is limited in the theoretical scaling capability, since the merge step is not parallelized. On large core counts, that can be important, so please see our supplementary code in \ref{subsub:pmerge}.
 
 \subsection{Parallel Primes Sieve}
 \label{subsub:pprimes}
@@ -340,7 +349,7 @@ Since we're creating one thread for each number, the overhead here overwhelms th
 
 Prefix-scan-sum is another classic algorithm that is able to benefit nicely from having multiple threads. Without going into any details about how this operation works or what it does, the short code below can take advantage of all cores and SIMD units available on the native machine—even with a generic ahead-of-time-compiled system image:
 
-\begin{lstlisting}[language = Julia, inputencoding=utf8, literate = {⊕}{{$\oplus$}}1]
+\begin{lstlisting}[language = Julia, inputencoding = utf8, literate = {⊕}{{$\oplus$}}1]
 using .Threads: @threads
 function prefix_threads!(⊕, y::AbstractVector)
     l = length(y)
@@ -488,7 +497,7 @@ Previously, this would have been more simply |c = Condition(); is_condition_met(
 \subsection{Changes to IO}
 \label{subsub:integration-io}
 
-Changing the I/O code (files, streams, folders, and other platform code) to work on from any thread was another big project. The existing design requires an underlying asynchronous library, with a design similar to Windows IOCP, to efficiently manage large numbers of open event sources and provide the simplicity and concision of the logic shown in \ref{subsub:background} on all platforms. For this, we have been using the libuv library. This lets us have most platform-specific code isolated in a separately tested library and provide more commonality in our runtime library. As an initial implementation to make this library safe to use from threads, we've used one big IO lock around all calls to it. However, this library also has callbacks and will block to wait for external incoming events, so we also needed to integrate it fully with the task scheduler to get it to cooperatively release the lock on demand. We were able to do so by adding an asynchronous channel (\verb|uv_async_t|) to wake the one thread running the event loop while all other threads sleep on a system mutex (\verb|uv_cond_t|) when there is no work for them to perform. When try entering the event loop, we do so only if the count of currently waiting tasks is zero. In the future, this work may allow us to move the event loop entirely to a separate thread (and/or multiple threads). It seems that this design change may thus be making threading support a mandatory requirement for the underlying VM—with the advantage we that we can get more throughput on the large-core systems that are only becoming more common.
+Changing the I/O code (files, streams, folders, and other platform code) to work on from any thread was another big project. The existing design requires an underlying asynchronous library, with a design similar to Windows IOCP, to efficiently manage large numbers of open event sources and provide the simplicity and concision of the logic shown in section \ref{subsub:background} on all platforms. For this, we have been using the libuv library. This lets us have most platform-specific code isolated in a separately tested library and provide more commonality in our runtime library. As an initial implementation to make this library safe to use from threads, we've used one big IO lock around all calls to it. However, this library also has callbacks and will block to wait for external incoming events, so we also needed to integrate it fully with the task scheduler to get it to cooperatively release the lock on demand. We were able to do so by adding an asynchronous channel (\verb|uv_async_t|) to wake the one thread running the event loop while all other threads sleep on a system mutex (\verb|uv_cond_t|) when there is no work for them to perform. When try entering the event loop, we do so only if the count of currently waiting tasks is zero. In the future, this work may allow us to move the event loop entirely to a separate thread (and/or multiple threads). It seems that this design change may thus be making threading support a mandatory requirement for the underlying VM—with the advantage we that we can get more throughput on the large-core systems that are only becoming more common.
 
 \subsection{Changes to Memoization Caches}
 \label{subsub:integration-caches}
@@ -531,7 +540,7 @@ Some aspects were still too performance critical however to be able to use a loc
 \section{Implementation}
 \label{subsub:implementation}
 
-A prototype implementation of the \verb|partr| scheduler was first written for us in C by Kiran Pamnany of Intel back in late 2016, following research done on scheduling threads for beneficial cache sharing for best throughput\cite{Chen:2007:STC:1248377.1248396}. The goal of this work was effortless composition of threading-capable libraries with a globally depth-first work ordering (as opposed to $1 \mathbin{:} 1$/preemptive scheduling, which would try to make progress on all work, or work-stealing scheduling, which is only depth-first local to a thread and is globally breadth-first).
+A prototype implementation of the \verb|partr| scheduler was first written for us in C by Kiran Pamnany of Intel back in late 2016\footnote{\verb|partr| codebase: \url{https://github.com/kpamnany/partr}}, following research done on scheduling threads for beneficial cache sharing for best throughput\cite{Chen:2007:STC:1248377.1248396}. The goal of this work was effortless composition of threading-capable libraries with a globally depth-first work ordering (as opposed to $1 \mathbin{:} 1$/preemptive scheduling, which would try to make progress on all work, or work-stealing scheduling, which is only depth-first local to a thread and is globally breadth-first).
 
 The next stage of this work was then to integrate it with the existing JuliaLang runtime system and hoist as much of the implementation as possible into native Julian code. (Aside: one outcome of this work has been to allow us to delete much of the special support code from the C runtime for our prior experimental `\verb|@threads|' fork/join-style API!)
 
@@ -592,5 +601,51 @@ The figure \ref{fig:windmill} is a windmill.
 The figure \ref{fig:atomic} is a atom.
 
 \input{bib.tex}
+
+\appendix
+\section{Parallel Merge}
+\label{subsub:pmerge}
+
+For doing the merge step of a merge sort in parallel, we only need to add a bit of code to the \verb|merge!| function. Let's call the result \verb|`merge!|. The details of this algorithm can be found elsewhere, although most textbooks do not give the stable algorithm used here. This is a minor enhancement and simplification of the algorithm given in the original paper\cite{Gavril:1975:MPP:361020.361216}, as described in ``Structured Parallel Programming"\cite{McCool:2012:SPP:2385466} in section 13.1 on page 300, and in a later \href{https://software.intel.com/en-us/articles/a-parallel-stable-sort-using-c11-for-tbb-cilk-plus-and-openmp}{blog post by one of the authors}\cite{parallel-merge-intel}.
+
+\begin{lstlisting}[language = Julia, inputencoding = utf8, literate = {÷}{{$\div$}}1]
+function pmerge!(left, right, out)
+    ll, lr = length(left), length(right)
+    @assert ll + lr == length(out)
+    if length(out) < 100_000
+        # below some threshold, just do the merge
+        merge!(left, right, out)
+    else
+        # split the larger chunk in half, then binary search the
+        # smaller half to split it
+        if ll > lr
+            jl = ll ÷ 2
+            # stable sort: find the last entry in right
+            # strictly smaller than l
+            jr = searchsortedfirst(right, left[jl]) - 1
+        else
+            jr = lr ÷ 2
+            # stable sort: find the last entry in left not bigger
+            # than r
+            jl = searchsortedlast(left, right[jr])
+        end
+        @sync begin
+            let left = view(left, 1:jl),
+                right = view(right, 1:jr),
+                out = view(out, 1:(jl + jr))
+                Threads.@spawn pmerge!(left, right, out)
+            end
+            let left = view(left, (jl + 1):ll),
+                right = view(right, (jr + 1):lr),
+                out = view(out, (jl + jr + 1):length(out))
+                pmerge!(left, right, out)
+           end
+        end
+    end
+    nothing
+end
+\end{lstlisting}
+
+This was tested with 8 hyperthreads on the same 4 core laptop as before on a vector \verb|a| consisting of 20M random doubles (Float64 elements). With the parallel \verb|pmerge!|, \verb|@btime psort(a)| reported a runtime of 533 ms vs. 743 ms for the serial merge \verb|merge!|!
 
 \end{document}
