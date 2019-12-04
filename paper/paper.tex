@@ -1,4 +1,4 @@
-% Based on the JuliaCon proceedings template
+ % Based on the JuliaCon proceedings template
 % Layout inspired by the International Journal of Computer Applications template
 \documentclass{juliacon}
 \usepackage{hgblistings}
@@ -59,6 +59,7 @@
 \input{header}
 
 \maketitle
+
 
 \begin{abstract}
 
@@ -242,7 +243,7 @@ A classic algorithm, parallel merge sort shows nice performance benefit and scal
 function psort(v::AbstractVector)
     hi = length(v)
     if hi < 100_000 # below some cutoff, run in serial
-        return sort(view(v, 1:hi), alg = MergeSort)
+        return sort(v, alg = MergeSort)
     end
 # split the range and sort the halves in parallel recursively
     mid = (1 + hi) >>> 1
@@ -251,11 +252,11 @@ function psort(v::AbstractVector)
     left = fetch(half)::typeof(right)
 # perform the merge on the result
     out = similar(v)
-    merge!(left, right, out)
+    merge!(out, left, right)
     return out
 end
 
-function merge!(left, right, out)
+function merge!(out, left, right)
     ll, lr = length(left), length(right)
     @assert ll + lr == length(out)
     i, il, ir = 1, 1, 1
@@ -391,7 +392,7 @@ On a quad-core laptop (Intel(R) Core(TM) i7-8559U CPU @ 2.70GHz), we observed th
     \hline
     S61\_SIEVE & 14.704s & 7.709s & 4.065s & 2.241s \\
     psort & 2.609s & 1.528s & 1.321s & 0.993s \\
-    prefix\_threads! & 2.375s & 1.462s & 1.100s & 1.043s \\
+    prefix\_threads! & 2.375ms & 1.462ms & 1.100ms & 1.043ms \\
     \hline
 \end{tabular}}
 \label{table:timings}
@@ -609,12 +610,12 @@ The figure \ref{fig:atomic} is a atom.
 For doing the merge step of a merge sort in parallel, we only need to add a bit of code to the \verb|merge!| function. Let's call the result \verb|merge!|. The details of this algorithm can be found elsewhere, although most textbooks do not give the stable algorithm used here. This is a minor enhancement and simplification of the algorithm given in the original paper\cite{Gavril:1975:MPP:361020.361216}, as described in ``Structured Parallel Programming''\cite{McCool:2012:SPP:2385466} in section 13.1 on page 300, and in a later \href{https://software.intel.com/en-us/articles/a-parallel-stable-sort-using-c11-for-tbb-cilk-plus-and-openmp}{blog post by one of the authors}\cite{parallel-merge-intel}.
 
 \begin{lstlisting}[language = Julia, inputencoding = utf8, literate = {÷}{{$\div$}}1]
-function pmerge!(left, right, out)
+function pmerge!(out, left, right)
     ll, lr = length(left), length(right)
     @assert ll + lr == length(out)
     if length(out) < 100_000
         # below some threshold, just do the merge
-        merge!(left, right, out)
+        merge!(out, left, right)
     else
         # split the larger chunk in half, then binary search the
         # smaller half to split it
@@ -633,12 +634,12 @@ function pmerge!(left, right, out)
             let left = view(left, 1:jl),
                 right = view(right, 1:jr),
                 out = view(out, 1:(jl + jr))
-                Threads.@spawn pmerge!(left, right, out)
+                Threads.@spawn pmerge!(out, left, right)
             end
             let left = view(left, (jl + 1):ll),
                 right = view(right, (jr + 1):lr),
                 out = view(out, (jl + jr + 1):length(out))
-                pmerge!(left, right, out)
+                pmerge!(out, left, right)
            end
         end
     end
