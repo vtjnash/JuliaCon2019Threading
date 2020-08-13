@@ -1,4 +1,4 @@
- % Based on the JuliaCon proceedings template
+% Based on the JuliaCon proceedings template
 % Layout inspired by the International Journal of Computer Applications template
 \documentclass{juliacon}
 \usepackage{hgblistings}
@@ -149,15 +149,9 @@ In $N (k \mathbin{:} 1) \mathbin{:} M$ scheduling, we have $N$ units of work map
 
 We can extend this model further by factoring out a common factor of $P \mathbin{:} P$ to write this as $N (k \mathbin{:} 1) \mathbin{:} M\ +\ P(k \mathbin{:} 1) \mathbin{:} P$ and derive one further useful use case: the ability to pin one thread to running one task (or task-group). These $P$ tasks could be an over-subscription of the CPU cores, or take away from $M$, or both. Typical uses for this mode of operation would be high-availability tasks (with low latency requirements, but also minimal computation), such as background I/O processing, blocking work pools (foreign library integration), finalizers, or message server queues.
 
-The newest work here is the implementation of a thread-aware scheduler. For a couple years, JuliaLang has been able to perform simple loop parallelism with numerous caveats including a static work schedule and minimal to none inter-thread communication. This had been labelled ``experimental,'' while we worked out the details and shook out the bugs. The recent work to generalize that functionality has allowed us to rewrite that older static capability on top of our new runtime, demonstrating the power and flexibility of the new system. While the old system let us test out the thread-related bugs in the runtime, it had some significant shortcomings. We knew those would need to be addressed before we could move beyond the ``experimental'' label.
+For a couple years, JuliaLang has been able to perform simple loop parallelism with the `\verb|@threads for|' macro, roughly analogous to OpenMP's `\verb|#pragma omp parallel for schedule(static)|' without support for reductions. This had been labelled ``experimental'' while we focused on making JuliaLang's runtime re-entrant and threadsafe and clarified requirements for the final parallelism capabilities. The experimental threading infrastructure had no scheduler, could not interact with regular tasks or do I/O, and parallel loops could not be nested. This made it nearly impossible to write many common algorithms or use a large portion of the language while running a threaded region of code.
 
-Those limitations included:
-\begin{itemize}
-\item it had no scheduler, and so couldn't interact with regular tasks or do I/O
-\item the runtime was full of race conditions
-\item the `\verb|@threads|' loops could not be nested
-\item parallel code couldn't run outside the `\verb|@threads|' loop
-\end{itemize}
+The new threading runtime addresses all these shortcomings. Furthermore, in addition to the new parallelism constructs that have been introduced, the previous loop parallelism capability has been rewritten on top of this runtime, demonstrating its power and flexibility.
 
 \begin{calloutbox}[Running Julia with Threads]
 In the examples below, we will be using JuliaLang v1.3 launched with multiple threads.
@@ -187,7 +181,7 @@ julia> Threads.threadid()
 \subsection{Stochastic Ordering}
 \label{subsub:pprint}
 
-One of the more visual ways to show we have threads working is to show the scheduler picking up work in semi-random, interleaving, orders. Previous versions of Julia already had an `\verb|@threads for|' macro which would split a range and run a portion on each thread with a static schedule. So in the range below, thread 1 would run items 1 and 2, thread 2 would run items 3 and 4, and so on. Now these threads supports doing I/O too with that same schedule.
+One of the more visual ways to show we have threads working is to show the scheduler picking up work in semi-random, interleaving, orders. JuliaLang's existing `\verb|@threads for|' macro would split a range and run a portion on each thread with a static schedule. So in the range below, thread 1 would run items 1 and 2, thread 2 would run items 3 and 4, and so on. Now these threads support doing I/O too with that same schedule.
 
 \begin{lstlisting}[language = Julia]
 bash$> JULIA_NUM_THREADS=8 julia <<EOF
@@ -209,7 +203,7 @@ EOF
 6 on thread 3
 \end{lstlisting}
 
-But now, it's also now possible to do the same example but with a completely dynamic schedule. With the improved language runtime, this takes a few small tweaks now. We use the new `\verb|@spawn|' macro with the existing `\verb|@sync|' macro to delineate the work items.
+But now, it's also now possible to do the same example but with a completely dynamic schedule. With the improved language runtime, this takes a few small tweaks now. We use the new `\verb|@spawn|' macro with the existing `\verb|@sync|' macro to delineate the work items. The `\verb|@spawn|' macro marks a block of code that can immediately start executing, asynchronously, on any free thread. The preexisting `\verb|@sync|' macro then waits for all (lexical) subtasks to complete, eliminating the boilerplate necessary to track and wait on each task block separately.
 
 \begin{lstlisting}[language = Julia]
 bash$> JULIA_NUM_THREADS=8 julia <<EOF
@@ -236,7 +230,7 @@ But on to even more fun stuff...
 \subsection{Parallel Merge Sort}
 \label{subsub:psort}
 
-A classic algorithm, parallel merge sort shows nice performance benefit and scaling from using multiple threads. This function will create $O(log(n))$ subtasks which will sort independent portions of the array before merging them into a final sorted copy of the input. We use here the ability of each task to return a value to directly \verb|fetch| the result without requiring an additional channel for data!
+A classic algorithm, parallel merge sort shows nice performance benefit and scaling from using multiple threads. This function will create $O(log(n))$ subtasks which will sort independent portions of the array before merging them into a final sorted copy of the input. We use here the ability of each task to return a value to directly \verb|fetch| the result without requiring an additional channel for data! This operation implicitly waits for the task to finish, then accesses the result value of the Task.
 
 \begin{lstlisting}[language = Julia]
 # perform a merge sort on `v` using parallel threads
@@ -290,6 +284,21 @@ To see the timing results as we add threads, refer to figure \ref{fig:scalings} 
 While not demonstrated here, \verb|fetch| would also automatically propagate errors, with the result of it being an error thrown if the child task ended by throwing an exception.
 
 Since we are using in-process threads, we could further optimize this to instead mutate the input in-place and to reuse work buffers for additional performance. We have elsewhere tested that and shown the performance improvement is as expected. However, since the scaling improvement was similar between them, we've opted not to include it here.
+
+On a single thread, this code is already quite competitive to the optimized serial implementation in the standard library, which does not use any threading:
+
+\begin{lstlisting}[language = Julia]
+julia> @time psort(a);
+  2.676906 seconds (3.06 k allocations: 1.416 GiB, 3.66% gc time)
+
+julia> @time sort(a);
+  1.716137 seconds (2 allocations: 152.588 MiB)
+
+julia> @time sort(a, alg=MergeSort);
+  2.123958 seconds (5 allocations: 228.882 MiB)
+\end{lstlisting}
+
+This shows we are adding some overhead, but it is not substantial. In fact, with 2 threads, we'll already be faster than the serial implementations!
 
 The algorithm given here is limited in the theoretical scaling capability, since the merge step is not parallelized. On large core counts, that can be important, so please see our supplementary code in appendix \ref{subsub:pmerge} for the version with optimal theoretical scaling.
 
@@ -449,7 +458,7 @@ Once we determined we wanted to make concurrency and parallelism use the same co
 \subsection{Changes to Tasks}
 \label{subsub:integration-tasks}
 
-The existing concurrency primitive of \verb|Tasks| was enhanced by exposing a new, optional flag to enable thread-migration for it. We call this concept ``sticky'' tasks, as a default tasks is only cooperatively runnable on the thread that \verb|scheduled| them. When set to false, however, the task becomes eligible to be picked up by any other thread. Combined with the internal changes to make \verb|wait| on events and channels thread-safe, we believe this provides an easy-to-use mechanism for selecting between the simpler cooperatively concurrent usage (single-threaded) and the more general simultaneous parallelism (multi-threaded).
+The existing concurrency primitive of \verb|Tasks| was enhanced by exposing a new, optional flag to enable thread-migration for it. We call this concept ``sticky'' tasks, as a default task is only cooperatively runnable on the thread that \verb|scheduled| them. When set to false, however, the task becomes eligible to be picked up by any other thread. Combined with the internal changes to make \verb|wait| on events and channels thread-safe, we believe this provides an easy-to-use mechanism for selecting between the simpler cooperatively concurrent usage (single-threaded) and the more general simultaneous parallelism (multi-threaded).
 
 \begin{lstlisting}[language = Julia]
 t = Task(() -> [closure code])
@@ -497,10 +506,10 @@ end
 
 Previously, this would have been more simply |c = Condition(); is_condition_met() || wait(c)|.  While this change may seem more difficult at first glance, we observed that while the lock acquisition here could be hidden inside \verb|wait| in the first replacement, all of this structure will usually still be required by the |is_condition_met| function. And the code would get much further complicated by the need to release the lock before calling \verb|wait|. We concluded therefore that in most cases the code would be made simpler and faster by changing the API to the second option. This also meant that when code was being changed to be thread-safe, it would need to replace uses of \verb|Condition| with the new \verb|Threads.Condition|.
 
-\subsection{Changes to IO}
+\subsection{Changes to I/O}
 \label{subsub:integration-io}
 
-Changing the I/O code (files, streams, folders, and other platform code) to work on from any thread was another big project. The existing design requires an underlying asynchronous library, with a design similar to Windows IOCP, to efficiently manage large numbers of open event sources and provide the simplicity and concision of the logic shown in section \ref{subsub:background} on all platforms. For this, we have been using the libuv library. This lets us have most platform-specific code isolated in a separately tested library and provide more commonality in our runtime library. As an initial implementation to make this library safe to use from threads, we've used one big IO lock around all calls to it. However, this library also has callbacks and will block to wait for external incoming events, so we also needed to integrate it fully with the task scheduler to get it to cooperatively release the lock on demand. We were able to do so by adding an asynchronous channel (\verb|uv_async_t|) to wake the one thread running the event loop while all other threads sleep on a system mutex (\verb|uv_cond_t|) when there is no work for them to perform. When try entering the event loop, we do so only if the count of currently waiting tasks is zero. In the future, this work may allow us to move the event loop entirely to a separate thread (and/or multiple threads). It seems that this design change may thus be making threading support a mandatory requirement for the underlying VM—with the advantage we that we can get more throughput on the large-core systems that are only becoming more common.
+Changing the I/O code (files, streams, folders, and other platform code) to work on from any thread was another big project. The existing design requires an underlying asynchronous library, with a design similar to Windows IOCP, to efficiently manage large numbers of open event sources and provide the simplicity and concision of the logic shown in section \ref{subsub:background} on all platforms. For this, we have been using the libuv library. This lets us have most platform-specific code isolated in a separately tested library and provide more commonality in our runtime library. As an initial implementation to make this library safe to use from threads, we've used one big I/O lock around all calls to it. However, this library also has callbacks and will block to wait for external incoming events, so we also needed to integrate it fully with the task scheduler to get it to cooperatively release the lock on demand. We were able to do so by adding an asynchronous channel (\verb|uv_async_t|) to wake the one thread running the event loop while all other threads sleep on a system mutex (\verb|uv_cond_t|) when there is no work for them to perform. When we try entering the event loop, we do so only if the count of currently waiting tasks is zero. In the future, this work may allow us to move the event loop entirely to a separate thread (and/or multiple threads). It seems that this design change may thus be making threading support a mandatory requirement for the underlying VM—with the advantage we that we can get more throughput on the large-core systems that are only becoming more common.
 
 \subsection{Changes to Memoization Caches}
 \label{subsub:integration-caches}
@@ -534,11 +543,11 @@ Due to the design of the rest of the language avoiding access to mutable state i
 
 Discussion of the GC design and subsequent updates to make it work well with threads could occupy an entire article of its own, so it will not be discussed here. Although in the future work section later in this paper, some improvements being investigated for the compiler will be discussed.
 
-When using locks, there is a hierarchy of access that must be respected to avoid deadlocks. This is documented somewhat sparsely at \url{https://docs.julialang.org/en/v1/devdocs/locks/}. Over time, we'll extend this list as we discover problems or are able to simplify shared resources. There's some known issues already, such as the lack of a lock around certain ``toplevel-only'' operations and an invalid design for the ordering of the \verb|Module->lock|. These issues will be addressed in time—they are not known to be insurmountable issues.
+When using locks, there is a hierarchy of access that must be respected to avoid deadlocks. This is documented somewhat sparsely at \url{https://docs.julialang.org/en/v1/devdocs/locks/}. Over time, we'll extend this list as we discover problems or are able to simplify shared resources. There are some known issues already such as the lack of a lock around certain ``toplevel-only'' operations and an invalid design for the ordering of the \verb|Module->lock|. These issues will be addressed in time—they are not believed to be insurmountable issues.
 
 The missing toplevel lock is interesting, since it is a lock against concurrent execution of \textit{any} other code. This will require halting all other threads in some way to inhibit accidental observation of the global state while it's in an intermediate inconsistent state. This should be possible in coordination with the GC-safepoint lock, which already has a very similar problem.
 
-Some aspects were still too performance critical however to be able to use a lock there, so we also make careful use of atomic pointer-publishing updates in a few specific places. As special-cases of that, we use RCU-type (read-copy-update) updates in some places and write-once in other places). This is known to work on most computer architectures. Others, such as the notorious DEC Alpha, we are content to exclude. In a code-base that already supports garbage-collection, the RCU algorithm is greatly simplified (and writers pay no additional cost), so this is typically preferred, if mutation is absolutely required and reads must be fast. Otherwise, a simple lock is used.
+Some aspects were still too performance critical however to be able to use a lock there, so we also make careful use of atomic pointer-publishing updates in a few specific places. As special-cases of that, we use RCU-type (read-copy-update) updates in some places and write-once in other places). This is known to work on most computer architectures. Others, such as the notorious DEC Alpha, we are content to exclude. In a code-base that already supports garbage-collection, the RCU algorithm is greatly simplified (and writers pay no additional cost), so this is typically preferred if mutation is absolutely required and reads must be fast. Otherwise, a simple lock is used.
 
 \section{Implementation}
 \label{subsub:implementation}
@@ -547,7 +556,7 @@ A prototype implementation of the \verb|partr| scheduler was first written for u
 
 The next stage of this work was then to integrate it with the existing JuliaLang runtime system and hoist as much of the implementation as possible into native Julian code. (Aside: one outcome of this work has been to allow us to delete much of the special support code from the C runtime for our prior experimental `\verb|@threads|' fork/join-style API!)
 
-A big challenge of this work has been implementing a sound algorithm for determining when threads should ``park'' themselves in a sleep mutex or wait for IO. This requires careful coordination to ensure we don't create a single contention point when trying \verb|schedule| and run tasks, but also is responsive to resume when new work arrives (either internally, from another thread, or externally, from IO streams). This is done by setting a flag in the task to notify it after work is added to the queue. If the running task sees that the thread was previously sleeping, it then additionally notifies its condition variable to wake it up.
+A big challenge of this work has been implementing a sound algorithm for determining when threads should ``park'' themselves in a sleep mutex or wait for I/O. This requires careful coordination to ensure we don't create a single contention point when trying to \verb|schedule| and run tasks, but also are responsive to resume when new work arrives (either internally, from another thread, or externally, from I/O streams). This is done by setting a flag in the task to notify it after work is added to the queue. If the running task sees that the thread was previously sleeping, it then additionally notifies its condition variable to wake it up.
 
 \section{Foreign Libraries}
 \label{subsub:ffi}
@@ -556,7 +565,7 @@ An important motivation for this work was our desire to better support multi-thr
 
 This is an on-going area of exploration as we get feedback on the performance and API needs of various libraries.
 
-We've successfully adapted FFTW to run on top of our threading runtime instead of its own (a pthreads-based workpool). This took us only a few hours! (We were fortunate to be able to enlist the assistance of that library's author). Without any performance tweaking (yet), it got competitive performance results! We learned important lessons in needing to tightly optimize our scheduler latency, which is now ongoing work to achieve exact performance parity. Even with some overhead imposed by generality however, we expect that the ability to compose thread-aware users and enable the better resource sharing created by the \verb|partr| scheduler will make this an overall improvement in program operation.
+We've successfully adapted FFTW to run on top of our threading runtime instead of its own\footnote{FFTW.jl partr thread support: \url{https://github.com/JuliaMath/FFTW.jl/pull/105}} (a pthreads-based workpool). This took us only a few hours (we were fortunate to be able to enlist the assistance of that library's author). Without any performance tweaking (yet), we saw competitive performance results! We learned important lessons in needing to tightly optimize our scheduler latency, which is now ongoing work to achieve exact performance parity\footnote{FFTW.jl performance comparison: \url{https://github.com/JuliaMath/FFTW.jl/pull/151}}. Even with some overhead imposed by generality however, we expect that the ability to compose thread-aware users and enable the better resource sharing created by the \verb|partr| scheduler will make this an overall improvement in program operation.
 
 \section{Future work}
 \label{subsub:future}
