@@ -618,7 +618,7 @@ The figure \ref{fig:atomic} is a atom.
 \section{Parallel Merge}
 \label{subsub:pmerge}
 
-For doing the merge step of a merge sort in parallel, we only need to add a bit of code to the \verb|merge!| function. Let's call the result \verb|merge!|. The details of this algorithm can be found elsewhere, although most textbooks do not give the stable algorithm used here. This is a minor enhancement and simplification of the algorithm given in the original paper\cite{Gavril:1975:MPP:361020.361216}, as described in ``Structured Parallel Programming''\cite{McCool:2012:SPP:2385466} in section 13.1 on page 300, and in a later \href{https://software.intel.com/en-us/articles/a-parallel-stable-sort-using-c11-for-tbb-cilk-plus-and-openmp}{blog post by one of the authors}\cite{parallel-merge-intel}.
+For doing the merge step of a merge sort in parallel, we only need to add a bit of code to the \verb|merge!| function. Let's call the result \verb|pmerge!|. The details of this algorithm can be found elsewhere, although most textbooks do not give the stable algorithm used here. This is a minor enhancement and simplification of the algorithm given in the original paper\cite{Gavril:1975:MPP:361020.361216}, as described in ``Structured Parallel Programming''\cite{McCool:2012:SPP:2385466} in section 13.1 on page 300, and in a later \href{https://software.intel.com/en-us/articles/a-parallel-stable-sort-using-c11-for-tbb-cilk-plus-and-openmp}{blog post by one of the authors}\cite{parallel-merge-intel}.
 
 \begin{lstlisting}[language = Julia, inputencoding = utf8, literate = {÷}{{$\div$}}1]
 function pmerge!(out, left, right)
